@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eve</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body {
+  width:100vw; height:100vh;
+  background:#000;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  overflow:hidden;
+  font-family:'Segoe UI', system-ui, sans-serif;
+}
+
+.scene {
+  position:relative;
+  width:100vw;
+  height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.orb-wrap {
+  position:absolute;
+  width:100vw;
+  height:56.25vw;
+  max-height:100vh;
+  max-width:177.78vh;
+}
+
+video {
+  width:100%; height:100%;
+  transition: filter 1.4s ease;
+}
+
+/* color overlay on top of video – tints the whole video */
+.color-overlay {
+  position:absolute;
+  top:0; left:0; width:100%; height:100%;
+  pointer-events:none;
+  transition: background 1.4s ease, opacity 1.4s ease;
+  mix-blend-mode: color;
+  opacity:0;
+}
+
+#ringCanvas {
+  position:absolute;
+  top:0; left:0;
+  width:100%; height:100%;
+  pointer-events:none;
+}
+
+.name {
+  position:fixed; top:16px; left:50%; transform:translateX(-50%);
+  font-size:0.65rem; letter-spacing:0.55em;
+  color:rgba(255,255,255,0.15); text-transform:uppercase; z-index:10;
+}
+.state-label {
+  position:fixed; top:36px; left:50%; transform:translateX(-50%);
+  font-size:0.58rem; letter-spacing:0.2em;
+  color:rgba(255,255,255,0.25); text-transform:uppercase;
+  transition: color 1s; z-index:10;
+}
+.ui {
+  position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+  display:flex; gap:7px; flex-wrap:wrap; justify-content:center;
+  padding:0 10px; z-index:10;
+}
+.btn {
+  padding:5px 13px; border-radius:20px;
+  border:1px solid rgba(255,255,255,0.12);
+  background:rgba(0,0,0,0.7); color:rgba(255,255,255,0.35);
+  font-size:0.64rem; cursor:pointer; letter-spacing:0.04em;
+  transition:all 0.3s; backdrop-filter:blur(8px); font-family:inherit;
+}
+.btn:hover { border-color:rgba(255,255,255,0.35); color:#fff; }
+.btn.active { border-color:rgba(255,255,255,0.55); color:#fff; background:rgba(255,255,255,0.07); }
+
+#tap-msg {
+  position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+  color:rgba(255,255,255,0.5); font-size:0.85rem; letter-spacing:0.15em;
+  z-index:20; background:rgba(0,0,0,0.6); padding:12px 24px;
+  border-radius:12px; display:none;
+}
+</style>
+</head>
+<body>
+
+<div class="name">E V E</div>
+<div class="state-label" id="stateLabel">Warten</div>
+<div id="tap-msg">▶ Tippen zum Starten</div>
+
+<div class="scene">
+  <div class="orb-wrap">
+    <video id="vid" loop muted playsinline>
+      <source src="https://res.cloudinary.com/pgx5wj8x/video/upload/eve_orb_qzlgsd.mp4" type="video/mp4">
+    </video>
+    <div class="color-overlay" id="overlay"></div>
+  </div>
+  <canvas id="ringCanvas"></canvas>
+</div>
+
+<div class="ui">
+  <button class="btn active" data-state="idle">💤 Warten</button>
+  <button class="btn" data-state="listen">🎙 Zuhören</button>
+  <button class="btn" data-state="think">🧠 Nachdenken</button>
+  <button class="btn" data-state="speak">🔊 Sprechen</button>
+  <button class="btn" data-state="done">✅ Fertig</button>
+  <button class="btn" data-state="error">⚠️ Fehler</button>
+</div>
+
+<script>
+const vid = document.getElementById('vid');
+const overlay = document.getElementById('overlay');
+const stateLabel = document.getElementById('stateLabel');
+const tapMsg = document.getElementById('tap-msg');
+const ringCanvas = document.getElementById('ringCanvas');
+const rctx = ringCanvas.getContext('2d');
+
+// ── States ────────────────────────────────────────────────
+// hue: for video base shift
+// overlayColor: CSS color for mix-blend-mode:color overlay
+// rgb: particle color
+const STATES = {
+  idle:  {
+    hue: 0, sat: 1.0, bright: 1.0,
+    overlayColor: null, overlayOpacity: 0,
+    rgb:[200,200,255], label:'Warten',     labelColor:'rgba(200,200,255,0.35)'
+  },
+  listen: {
+    hue: 180, sat: 1.5, bright: 1.15,
+    overlayColor:'rgb(255,220,0)', overlayOpacity: 0.55,
+    rgb:[255,230,50],  label:'Zuhört…',    labelColor:'rgba(255,230,50,0.6)'
+  },
+  think: {
+    hue: 0, sat: 1.2, bright: 0.9,
+    overlayColor:'rgb(160,50,255)', overlayOpacity: 0.5,
+    rgb:[180,80,255],  label:'Denkt nach…',labelColor:'rgba(180,80,255,0.6)'
+  },
+  speak: {
+    hue: 0, sat: 1.1, bright: 1.2,
+    overlayColor: null, overlayOpacity: 0,
+    rgb:[200,200,255], label:'Spricht…',   labelColor:'rgba(200,200,255,0.4)'
+  },
+  done: {
+    hue: 180, sat: 1.3, bright: 1.1,
+    overlayColor:'rgb(30,220,80)', overlayOpacity: 0.55,
+    rgb:[50,230,100],  label:'Fertig ✓',  labelColor:'rgba(50,230,100,0.6)'
+  },
+  error: {
+    hue: 180, sat: 1.5, bright: 1.15,
+    overlayColor:'rgb(255,40,40)', overlayOpacity: 0.55,
+    rgb:[255,60,60],   label:'Fehler!',    labelColor:'rgba(255,60,60,0.6)'
+  },
+};
+
+let curRgb = [200,200,255];
+let targRgb = [200,200,255];
+
+function applyState(s) {
+  // video filter
+  vid.style.filter = `hue-rotate(${s.hue}deg) saturate(${s.sat}) brightness(${s.bright})`;
+  // color overlay
+  if (s.overlayColor) {
+    overlay.style.background = s.overlayColor;
+    overlay.style.opacity = s.overlayOpacity;
+  } else {
+    overlay.style.opacity = 0;
+  }
+  stateLabel.textContent = s.label;
+  stateLabel.style.color = s.labelColor;
+  targRgb = [...s.rgb];
+}
+
+let speakInterval;
+function startSpeak() {
+  let dir=1, br=1.2;
+  speakInterval = setInterval(()=>{
+    br += dir*0.07;
+    if(br>1.5||br<1.0) dir*=-1;
+    vid.style.filter = `hue-rotate(0deg) saturate(1.1) brightness(${br})`;
+  },100);
+}
+function stopSpeak(){ clearInterval(speakInterval); }
+
+// ── Canvas particle rings ─────────────────────────────────
+function resizeCanvas(){
+  ringCanvas.width = window.innerWidth;
+  ringCanvas.height = window.innerHeight;
+}
+resizeCanvas();
+window.addEventListener('resize', ()=>{ resizeCanvas(); initParticles(); });
+
+const particles = [];
+function initParticles(){
+  particles.length = 0;
+  const cx = window.innerWidth/2;
+  const cy = window.innerHeight/2;
+  // estimate orb radius from screen size
+  const vidW = Math.min(window.innerWidth, window.innerHeight * 16/9);
+  const orbR = vidW * 0.28;
+
+  // 3 rings of particles, tightly following the video's existing ring style
+  const ringDefs = [
+    { mult:1.18, count:120, size:1.2, opacity:0.7 },
+    { mult:1.42, count:90,  size:1.0, opacity:0.5 },
+    { mult:1.68, count:70,  size:0.9, opacity:0.4 },
+  ];
+
+  ringDefs.forEach((rd, ri) => {
+    for(let i=0;i<rd.count;i++){
+      const angle = (i/rd.count)*Math.PI*2 + Math.random()*0.15;
+      particles.push({
+        angle,
+        r: orbR*rd.mult + (Math.random()-0.5)*orbR*0.08,
+        size: rd.size*(0.6+Math.random()*0.8),
+        speed: (0.002+Math.random()*0.004)*(Math.random()<0.5?1:-1),
+        baseOpacity: rd.opacity*(0.4+Math.random()*0.6),
+        twinkleSpeed: 0.8+Math.random()*2,
+        twinkleOffset: Math.random()*Math.PI*2,
+        ringIdx: ri,
+      });
+    }
+  });
+}
+initParticles();
+
+let t=0;
+function drawRings(){
+  rctx.clearRect(0,0,ringCanvas.width,ringCanvas.height);
+  t+=0.016;
+
+  // lerp rgb
+  curRgb = curRgb.map((v,i)=>v+(targRgb[i]-v)*0.03);
+  const [r,g,b] = curRgb;
+
+  const cx = ringCanvas.width/2;
+  const cy = ringCanvas.height/2;
+  const vidW = Math.min(ringCanvas.width, ringCanvas.height*16/9);
+  const orbR = vidW*0.28;
+
+  // subtle ring lines
+  [1.18,1.42,1.68].forEach((mult,i)=>{
+    rctx.beginPath();
+    rctx.arc(cx, cy, orbR*mult, 0, Math.PI*2);
+    rctx.strokeStyle=`rgba(${r},${g},${b},${0.07-i*0.015})`;
+    rctx.lineWidth=0.6;
+    rctx.stroke();
+  });
+
+  // particles
+  particles.forEach(p=>{
+    p.angle += p.speed;
+    const twinkle = Math.sin(t*p.twinkleSpeed+p.twinkleOffset)*0.5+0.5;
+    const alpha = p.baseOpacity * twinkle;
+
+    const px = cx + p.r*Math.cos(p.angle);
+    const py = cy + p.r*Math.sin(p.angle);
+
+    // only draw if OUTSIDE the video bounds (top/bottom areas)
+    // This makes rings look like they extend naturally
+    const vidH = Math.min(ringCanvas.height, vidW*9/16);
+    const topEdge = cy - vidH/2;
+    const botEdge = cy + vidH/2;
+    const inVideoZone = py > topEdge && py < botEdge;
+
+    // draw everywhere but slightly fade in video zone
+    const zoneFade = inVideoZone ? 0.0 : 1.0;
+    if(zoneFade === 0) return; // skip inside video – video has its own particles
+
+    // glow dot
+    const grd = rctx.createRadialGradient(px,py,0,px,py,p.size*5);
+    grd.addColorStop(0,`rgba(${r},${g},${b},${alpha*zoneFade*0.9})`);
+    grd.addColorStop(1,`rgba(${r},${g},${b},0)`);
+    rctx.fillStyle=grd;
+    rctx.beginPath(); rctx.arc(px,py,p.size*5,0,Math.PI*2); rctx.fill();
+
+    // bright center
+    rctx.fillStyle=`rgba(255,255,255,${alpha*zoneFade*0.95})`;
+    rctx.beginPath(); rctx.arc(px,py,p.size*0.5,0,Math.PI*2); rctx.fill();
+  });
+
+  requestAnimationFrame(drawRings);
+}
+drawRings();
+
+// ── Autoplay ──────────────────────────────────────────────
+vid.load();
+vid.play().catch(()=>{
+  tapMsg.style.display='block';
+  document.addEventListener('click',()=>{
+    vid.play(); tapMsg.style.display='none';
+  },{once:true});
+});
+
+// ── Controls ──────────────────────────────────────────────
+document.querySelectorAll('.btn').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('.btn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    stopSpeak();
+    applyState(STATES[b.dataset.state]);
+    if(b.dataset.state==='speak') startSpeak();
+  });
+});
+
+applyState(STATES.idle);
+</script>
+</body>
+</html>
